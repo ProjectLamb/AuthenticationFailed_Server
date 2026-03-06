@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  ai-partner-api:
+    build: .
+    container_name: authentication_failed_ai
+    # 호스트에 있는 .env 파일을 컨테이너 안으로 안전하게 넘겨줍니다.
+    env_file:
+      - .env
+    networks:
+      - npm-connect
+    # 서버 재부팅 시 자동으로 켜지도록 설정
+    restart: unless-stopped
+
+networks:
+  npm-connect:
+    external: true
+    name: proxy-net
