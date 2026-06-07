@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
 import json
+import uuid
 
 # 환경변수 로드가 가장 먼저 실행되어야 합니다.
 load_dotenv()
@@ -14,6 +15,7 @@ if not (os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")):
 from services import ai_service
 
 app = FastAPI(title="AI 파트너 API", version="1.0.0")
+IMAGINATION_PANIC = "이메지네이션 패닉"
 
 
 class ChatRequest(BaseModel):
@@ -22,22 +24,59 @@ class ChatRequest(BaseModel):
     target_code: str = ""
 
 
+def _imagination_fallback(message: str):
+    return {
+        "isSpawning": False,
+        "shapeIndex": 0,
+        "matIndex": 0,
+        "scaleX": 1.0,
+        "scaleY": 0.5,
+        "scaleZ": 1.0,
+        "replyMessage": message,
+    }
+
+
+def _parse_imagination_json(ai_reply: str):
+    cleaned = ai_reply.replace("```json", "").replace("```", "").strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and start < end:
+            return json.loads(cleaned[start:end + 1])
+        raise
+
+
 @app.post("/api/v1/chat", tags=["1. AI Partner (Text)"])
 async def talk_to_partner_text(req: ChatRequest):
     try:
-        # 비즈니스 로직(서비스) 호출
         ai_reply = await ai_service.generate_text_reply(req.message, req.minigame_type, req.target_code)
 
-        # [핵심] 이메지네이션 패닉은 유니티에서 바로 읽을 수 있게 순수 JSON을 던져줘야 함
-        if req.minigame_type == "이메지네이션 패닉":
-            cleaned_json = ai_reply.replace("```json", "").replace("```", "").strip()
-            return JSONResponse(content=json.loads(cleaned_json))
+        if req.minigame_type == IMAGINATION_PANIC:
+            try:
+                parsed = _parse_imagination_json(ai_reply)
+                parsed.setdefault("isSpawning", False)
+                parsed.setdefault("shapeIndex", 0)
+                parsed.setdefault("matIndex", 0)
+                parsed.setdefault("scaleX", 1.0)
+                parsed.setdefault("scaleY", 0.5)
+                parsed.setdefault("scaleZ", 1.0)
+                parsed.setdefault("replyMessage", "요청을 처리했다.")
+                return JSONResponse(content=parsed)
+            except Exception as parse_error:
+                preview = ai_reply[:160].replace("\n", " ") if ai_reply else "empty response"
+                return JSONResponse(content=_imagination_fallback(
+                    f"AI 응답 JSON 파싱 실패: {parse_error} / 원문: {preview}"
+                ))
 
-        # 일반 미니게임은 기존 포맷 유지
         is_cleared = req.target_code in ai_reply if req.target_code else False
         return {"reply": ai_reply, "is_cleared": is_cleared}
 
     except Exception as e:
+        if req.minigame_type == IMAGINATION_PANIC:
+            return JSONResponse(content=_imagination_fallback(f"서버 오류: {str(e)}"))
         return {"reply": f"서버 터짐. 로그 확인해봐. ({str(e)})", "is_cleared": False}
 
 
@@ -53,7 +92,6 @@ async def talk_to_partner_voice(
         buffer.write(await audio_file.read())
 
     try:
-        # 서비스 호출해서 음성 파일 경로 받아오기
         ai_audio_path = await ai_service.generate_voice_reply(user_audio_path, minigame_type, target_code)
 
         os.remove(user_audio_path)
@@ -61,7 +99,8 @@ async def talk_to_partner_voice(
 
         return FileResponse(path=ai_audio_path, media_type="audio/mpeg", filename="ai_reply.mp3")
     except Exception as e:
-        if os.path.exists(user_audio_path): os.remove(user_audio_path)
+        if os.path.exists(user_audio_path):
+            os.remove(user_audio_path)
         return {"error": str(e)}
 
 

@@ -9,18 +9,23 @@ from services.prompt_service import build_system_prompt
 # 환경변수는 이미 main.py 구동 시 로드되었다고 가정
 api_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
 client = genai.Client(api_key=api_key)
+IMAGINATION_PANIC = "이메지네이션 패닉"
 
 
 async def generate_text_reply(message: str, minigame_type: str, target_code: str) -> str:
     system_instruction = build_system_prompt(minigame_type, target_code)
+    config_kwargs = {
+        "system_instruction": system_instruction,
+        "temperature": 0.2 if minigame_type == IMAGINATION_PANIC else 0.7,
+    }
+
+    if minigame_type == IMAGINATION_PANIC:
+        config_kwargs["response_mime_type"] = "application/json"
 
     response = await client.aio.models.generate_content(
         model='gemini-2.5-flash',
         contents=message,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.7,
-        )
+        config=types.GenerateContentConfig(**config_kwargs)
     )
     return response.text
 
